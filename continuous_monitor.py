@@ -509,7 +509,7 @@ def discover_network(state):
     # 1.5 Service Fingerprinting for new/unknown devices
     for ip, info in discovered.items():
         mac = info['mac']
-        if mac in state.device_map and 'type' not in state.device_map[mac]:
+        if mac in state.device_map and state.device_map[mac].get('type') == 'unknown':
             fingerprint_device(ip, state, mac)
 
     state.discovered_devices = discovered
@@ -529,8 +529,9 @@ def fingerprint_device(ip, state, mac):
     key_ports = [62078, 49152, 5000, 7000, 46888, 10152, 5353, 137, 139, 22, 80, 443]
     port_str = ','.join(map(str, key_ports))
 
+    # Use TCP connect scan (-sT) which doesn't require root (we're already root anyway)
     stdout, _, _ = run_cmd([
-        'sudo', 'nmap', '-sT', '-sV', '-p', port_str,
+        'nmap', '-sT', '-sV', '-p', port_str,
         '--host-timeout', '10s', '--max-retries', '1',
         ip
     ], timeout=20)
