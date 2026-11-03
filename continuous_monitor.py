@@ -210,7 +210,11 @@ def discover_network(state):
                 vendor = ' '.join(parts[1:]).strip('()')
                 if current_ip not in discovered:
                     discovered[current_ip] = {'mac': mac, 'vendor': vendor, 'source': 'tcp_syn'}
-                state.device_map[current_ip]['mac'] = mac
+                # Update device map (create entry if new)
+                if current_ip in state.device_map:
+                    state.device_map[current_ip]['mac'] = mac
+                else:
+                    state.device_map[current_ip] = {'mac': mac, 'name': f'Unknown ({current_ip})', 'type': 'unknown'}
 
     # 1.3 Broadcast Ping
     run_cmd(['ping', '-c', '2', '-W', '1', '192.168.0.255'], timeout=5)
