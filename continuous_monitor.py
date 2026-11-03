@@ -37,8 +37,13 @@ import queue
 DEFAULT_CONFIG = {
     'interface': 'en0',
     'subnet': '192.168.0.0/24',
-    'discovery_interval': 30,      # seconds between discovery scans
+    'discovery_interval': 30,      # seconds between full discovery scans
     'capture_interval': 30,        # seconds of capture per cycle (longer to catch TLS handshakes)
+    'quick_discovery_interval': 10,  # seconds between quick ARP scans for new devices
+    'enable_web_dashboard': False,   # set True to enable Flask web dashboard
+    'web_port': 5000,
+    'max_domains_per_device': 20,   # max domains to track per device
+    'max_dns_per_device': 15,       # max DNS queries to track per device
     'alert_domains': [
         # Reddit - many subdomains used
         'reddit.com', 'www.reddit.com', 'oauth.reddit.com',
@@ -113,11 +118,14 @@ class MonitorState:
         self.traffic_stats = defaultdict(lambda: {
             'bytes': 0, 'packets': 0, 'domains': set(),
             'dns_queries': set(), 'connections': set(),
-            'first_seen': None, 'last_seen': None
+            'first_seen': None, 'last_seen': None,
+            'domain_timeline': [],  # list of (time, domain, source)
+            'dns_timeline': [],     # list of (time, domain)
         })
         self.alert_queue = queue.Queue()
         self.running = True
         self.cycle_count = 0
+        self.new_devices = set()  # newly discovered IPs this cycle
 
     def get_device_name(self, ip):
         return self.device_map.get(ip, {}).get('name', f'Unknown ({ip})')
@@ -126,11 +134,33 @@ class MonitorState:
         return self.device_map.get(ip, {}).get('type', 'unknown')
 
     def update_device(self, ip, mac=None, name=None, dtype=None):
-        if ip not in self.device_map:
+        is_new = ip not in self.device_map
+        if is_new:
             self.device_map[ip] = {}
+            self.new_devices.add(ip)
         if mac: self.device_map[ip]['mac'] = mac
         if name: self.device_map[ip]['name'] = name
         if dtype: self.device_map[ip]['type'] = dtype
+        return is_new
+
+    def add_domain_activity(self, name, domain, source='SNI'):
+        """Add domain to device timeline"""
+        max_domains = self.config.get('max_domains_per_device', 20)
+        stats = self.traffic_stats[name]
+        stats['domains'].add(domain)
+        stats['domain_timeline'].append((timestamp(), domain, source))
+        # Keep only last N entries
+        if len(stats['domain_timeline']) > max_domains:
+            stats['domain_timeline'] = stats['domain_timeline'][-max_domains:]
+
+    def add_dns_activity(self, name, domain):
+        """Add DNS query to device timeline"""
+        max_dns = self.config.get('max_dns_per_device', 15)
+        stats = self.traffic_stats[name]
+        stats['dns_queries'].add(domain)
+        stats['dns_timeline'].append((timestamp(), domain))
+        if len(stats['dns_timeline']) > max_dns:
+            stats['dns_timeline'] = stats['dns_timeline'][-max_dns:]
 
 state = None
 
@@ -350,9 +380,8 @@ def analyze_capture(pcap_file, state):
                             'source': 'SNI'
                         })
 
-                # Update traffic stats
-                state.traffic_stats[name]['domains'].add(sni)
-                state.traffic_stats[name]['last_seen'] = timestamp()
+                # Add to activity timeline
+                state.add_domain_activity(name, sni, 'SNI')
 
     # Extract DNS
     stdout, _, _ = run_cmd([
@@ -367,8 +396,7 @@ def analyze_capture(pcap_file, state):
             if len(parts) >= 2:
                 ip, domain = parts[0], parts[1]
                 name = state.get_device_name(ip)
-                state.traffic_stats[name]['dns_queries'].add(domain)
-                state.traffic_stats[name]['last_seen'] = timestamp()
+                state.add_dns_activity(name, domain)
 
                 # Check DNS for alerts (catches domains even with TLS session resumption)
                 for alert_domain in state.config['alert_domains']:
@@ -460,21 +488,25 @@ def print_dashboard(state):
         name_short = name[:19]
         print(f"  {name_short:<20} {ip:<15} {mac:<17} {dtype:<12} {mb:>10.2f} {pkts:>6} {domains:>6}  [{last}]")
 
-    # Recent domains per device
-    print(f"\n  {'RECENT ACTIVITY (Domains)'}")
-    print(f"  {'-'*70}")
+    # Recent domains per device (with timeline)
+    print(f"\n  {'RECENT ACTIVITY (Domains with Time)'}")
+    print(f"  {'-'*90}")
     for name, stats in state.traffic_stats.items():
-        if stats.get('domains'):
-            domains = sorted(stats['domains'])[-5:]  # Last 5
-            print(f"  {name[:20]:<20}: {', '.join(domains)}")
+        if stats.get('domain_timeline'):
+            # Show last 10 entries with time
+            recent = stats['domain_timeline'][-10:]
+            for time_str, domain, source in recent:
+                source_marker = '🔒' if source == 'SNI' else '🌐'
+                print(f"  {name[:18]:<18} [{time_str}] {source_marker} {domain}")
 
-    # DNS queries
-    print(f"\n  {'RECENT DNS QUERIES'}")
+    # DNS queries with timeline
+    print(f"\n  {'RECENT DNS QUERIES (with Time)'}")
     print(f"  {'-'*70}")
     for name, stats in state.traffic_stats.items():
-        if stats.get('dns_queries'):
-            dns = sorted(stats['dns_queries'])[-3:]  # Last 3
-            print(f"  {name[:20]:<20}: {', '.join(dns)}")
+        if stats.get('dns_timeline'):
+            recent = stats['dns_timeline'][-8:]
+            for time_str, domain in recent:
+                print(f"  {name[:18]:<18} [{time_str}] 🌐 {domain}")
 
     # Alerts
     print(f"\n  {'ALERTS'}")
@@ -521,6 +553,43 @@ def main_loop(config):
 
     # Initial discovery
     discover_network(state)
+
+    # Start background quick discovery thread (fast ARP scans for new devices)
+    quick_interval = config.get('quick_discovery_interval', 10)
+    def quick_discovery_worker(state):
+        """Background thread: quick ARP scans to detect new devices"""
+        while state.running:
+            time.sleep(quick_interval)
+            if not state.running:
+                break
+            # Quick ARP scan only
+            stdout, _, _ = run_cmd([
+                'sudo', 'arp-scan', '--localnet',
+                '--interface', state.config['interface'],
+                '--quiet'
+            ], timeout=10)
+
+            for line in stdout.strip().split('\n'):
+                if line and line[0].isdigit():
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        ip, mac = parts[0], parts[1]
+                        if 'packets' in line.lower() or 'received' in line.lower():
+                            continue
+                        if not re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', ip):
+                            continue
+                        if not re.match(r'^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$', mac):
+                            continue
+                        # Check if new device
+                        is_new = state.update_device(ip, mac=mac)
+                        if is_new:
+                            print(f"\n  📱 NEW DEVICE: {ip} ({mac}) - Fingerprinting...")
+                            fingerprint_device(ip, state)
+                            print(f"     → {state.get_device_name(ip)} [{state.get_device_type(ip)}]")
+
+    quick_thread = threading.Thread(target=quick_discovery_worker, args=(state,), daemon=True)
+    quick_thread.start()
+    print(f"  Background quick discovery: every {quick_interval}s")
 
     try:
         while state.running:
@@ -584,10 +653,12 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Continuous Network Monitor - Discovery + Attribution')
     parser.add_argument('-i', '--interface', default='en0', help='Network interface (default: en0)')
     parser.add_argument('-s', '--subnet', default='192.168.0.0/24', help='Subnet to monitor')
-    parser.add_argument('-d', '--discovery-interval', type=int, default=30, help='Seconds between discovery scans')
-    parser.add_argument('-c', '--capture-interval', type=int, default=15, help='Seconds of capture per cycle')
+    parser.add_argument('-d', '--discovery-interval', type=int, default=30, help='Seconds between full discovery scans')
+    parser.add_argument('-c', '--capture-interval', type=int, default=30, help='Seconds of capture per cycle')
+    parser.add_argument('-q', '--quick-discovery', type=int, default=10, help='Seconds between quick ARP scans for new devices')
     parser.add_argument('--alert-domains', help='Comma-separated domains to alert on')
     parser.add_argument('--list-devices', action='store_true', help='List known devices and exit')
+    parser.add_argument('--web', action='store_true', help='Enable web dashboard (Flask) on port 5000')
 
     args = parser.parse_args()
 
@@ -600,6 +671,8 @@ if __name__ == '__main__':
     config['subnet'] = args.subnet
     config['discovery_interval'] = args.discovery_interval
     config['capture_interval'] = args.capture_interval
+    config['quick_discovery_interval'] = args.quick_discovery
+    config['enable_web_dashboard'] = args.web
 
     if args.alert_domains:
         config['alert_domains'] = [d.strip() for d in args.alert_domains.split(',')]
