@@ -64,6 +64,14 @@ DEFAULT_CONFIG = {
         'linkedin.com', 'licdn.com',
         'pinterest.com', 'pinimg.com',
         'snapchat.com', 'snapchat.net',
+        # Adult sites
+        'pornhub.com', 'www.pornhub.com', 'phncdn.com',
+        'xnxx.com', 'www.xnxx.com', 'xnxx-cdn.com',
+        'xvideos.com', 'www.xvideos.com', 'xvideos-cdn.com',
+        'redtube.com', 'www.redtube.com',
+        'youporn.com', 'www.youporn.com',
+        'xhamster.com', 'www.xhamster.com',
+        'spankbang.com', 'www.spankbang.com',
     ],
     'known_devices': {
         '192.168.0.1':    {'mac': '28:ee:52:f7:74:dc', 'name': 'TP-Link Router', 'type': 'router'},

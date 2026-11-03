@@ -22,7 +22,7 @@ DISCOVERY_INTERVAL="${3:-30}"    # seconds between discovery scans
 CAPTURE_INTERVAL="${4:-15}"       # seconds of capture per cycle
 
 # Alert domains (comma-separated)
-ALERT_DOMAINS="reddit.com,www.reddit.com,facebook.com,www.facebook.com,fbcdn.net,instagram.com,www.instagram.com,youtube.com,www.youtube.com,googlevideo.com,twitter.com,www.twitter.com,x.com,tiktok.com,www.tiktok.com,netflix.com,nflxvideo.net"
+ALERT_DOMAINS="reddit.com,www.reddit.com,facebook.com,www.facebook.com,fbcdn.net,instagram.com,www.instagram.com,youtube.com,www.youtube.com,googlevideo.com,twitter.com,www.twitter.com,x.com,tiktok.com,www.tiktok.com,netflix.com,nflxvideo.net,pornhub.com,www.pornhub.com,xnxx.com,www.xnxx.com,xvideos.com,www.xvideos.com,redtube.com,www.redtube.com,youporn.com,www.youporn.com,xhamster.com,www.xhamster.com,spankbang.com,www.spankbang.com"
 
 # Known devices (IP\tMAC\tName\tType)
 # Add your devices here:
