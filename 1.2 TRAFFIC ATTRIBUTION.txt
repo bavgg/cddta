@@ -1,0 +1,122 @@
+Traffic Attribution = The process of mapping every captured network packet to the specific device that sent/received it.
+     
+  ---
+
+  How It Works (From NetCut's _processTraffic())
+
+  // For EVERY packet captured in promiscuous mode:
+  for each packet {
+      srcMAC = packet.ethernet.src;      // Hardware sender
+      dstMAC = packet.ethernet.dst;      // Hardware receiver
+
+      // THE KEY STEP: MAC → IP mapping via ARP table
+      srcIP = arpTable[srcMAC];          // "This MAC = 192.168.0.101"
+      dstIP = arpTable[dstMAC];          // "That MAC = 192.168.0.1"
+
+      // Now attribute stats to the DEVICE (IP)
+      deviceStats[srcIP].bytesSent += packet.length;
+      deviceStats[dstIP].bytesRecv += packet.length;
+
+      // Classify what the device is doing
+      if (packet.hasHTTP)  deviceStats[srcIP].websites.add(packet.httpHost);
+      if (packet.hasTLS)   deviceStats[srcIP].domains.add(packet.tlsSNI);
+      if (packet.hasDNS)   deviceStats[srcIP].queries.add(packet.dnsQuery);
+  }
+
+  ---
+
+  Why It's Hard (The Attribution Problem)
+
+  ┌────────────────────┬─────────────────────────┬───────────────────────────────────────────────┐
+  │       Layer        │      What You See       │             Attribution Challenge             │
+  ├────────────────────┼─────────────────────────┼───────────────────────────────────────────────┤
+  │ Layer 2 (Ethernet) │ MAC addresses only      │ MAC ≠ Device identity (randomized, shared)    │
+  ├────────────────────┼─────────────────────────┼───────────────────────────────────────────────┤
+  │ Layer 3 (IP)       │ IP addresses            │ Need ARP table to map MAC→IP                  │
+  ├────────────────────┼─────────────────────────┼───────────────────────────────────────────────┤
+  │ Layer 4 (TCP/UDP)  │ Ports                   │ Port ≠ App (port 443 = HTTPS, but which app?) │
+  ├────────────────────┼─────────────────────────┼───────────────────────────────────────────────┤
+  │ Layer 7 (App)      │ HTTP Host, TLS SNI, DNS │ Only visible if unencrypted or SNI exposed    │
+  └────────────────────┴─────────────────────────┴───────────────────────────────────────────────┘
+
+  Without ARP table: You see aa:bb:cc:dd:ee:ff → 192.168.0.1 but don't know which device aa:bb:cc:dd:ee:ff belongs to.
+
+  With ARP table: You know aa:bb:cc:dd:ee:ff = 192.168.0.101 (iPhone) → can attribute traffic to "iPhone".
+
+  ---
+
+  NetCut's Attribution Pipeline
+
+  Raw Packets (BPF/libpcap)
+          │
+          ▼
+  Extract srcMAC, dstMAC
+          │
+          ▼
+  Lookup ARP Table: MAC → IP
+          │
+          ▼
+  Aggregate per IP:
+    - Total bytes (bandwidth)
+    - HTTP Host headers → websites
+    - TLS SNI → domains
+    - DNS queries → lookups
+    - NetBIOS names → hostnames
+          │
+          ▼
+  Per-Device Activity Dashboard
+
+  ---
+
+  Why MITM (ARP Spoofing) Is Required for FULL Attribution
+
+  ┌───────────────────┬────────────────────────────────────────┬─────────────────────────────────────────────────────────────┐
+  │     Scenario      │          Packets You Capture           │               Can Attribute To Other Devices?               │
+  ├───────────────────┼────────────────────────────────────────┼─────────────────────────────────────────────────────────────┤
+  │ Normal (no MITM)  │ Only packets TO/FROM your MAC +        │ ❌ No - other devices' traffic goes switch port → gateway   │
+  │                   │ broadcasts                             │ directly                                                    │
+  ├───────────────────┼────────────────────────────────────────┼─────────────────────────────────────────────────────────────┤
+  │ ARP Spoofing      │ ALL packets (target thinks you're      │ ✅ Yes - you see every packet from target                   │
+  │ (MITM)            │ gateway)                               │                                                             │
+  └───────────────────┴────────────────────────────────────────┴─────────────────────────────────────────────────────────────┘
+
+  Switches isolate traffic by MAC. Without MITM, your NIC never receives other devices' unicast packets.
+
+  ---
+
+  Your Terminal Equivalent (Passive Attribution)
+
+  # 1. Build ARP table (run continuously)
+  sudo arp-scan --localnet --interface=en0 > /tmp/arp_table.txt
+
+  # 2. Capture packets
+  sudo tcpdump -i en0 -w capture.pcap
+
+  # 3. Attribute offline with tshark
+  tshark -r capture.pcap -T fields \
+    -e frame.time -e eth.src -e eth.dst -e ip.src -e ip.dst \
+    -e http.host -e tls.handshake.extensions_server_name -e dns.qry.name
+
+  # 4. Join with ARP table (MAC → IP → Device)
+  # Requires scripting (Python/awk) to map MACs to IPs from arp_table.txt
+
+  ---
+
+  Summary
+
+  ┌─────────────────────┬───────────────────────────────────────────────────────────┐
+  │        Term         │                          Meaning                          │
+  ├─────────────────────┼───────────────────────────────────────────────────────────┤
+  │ Traffic Attribution │ "Packet X belongs to Device Y"                            │
+  ├─────────────────────┼───────────────────────────────────────────────────────────┤
+  │ Input               │ Raw packets (MAC src/dst) + ARP table (MAC ↔ IP)          │
+  ├─────────────────────┼───────────────────────────────────────────────────────────┤
+  │ Output              │ Per-device: bandwidth, websites, DNS, apps                │
+  ├─────────────────────┼───────────────────────────────────────────────────────────┤
+  │ Requirement         │ ARP table must be current (hence continuous ARP scanning) │
+  ├─────────────────────┼───────────────────────────────────────────────────────────┤
+  │ Full visibility     │ Requires MITM to receive other devices' packets           │
+  └─────────────────────┴───────────────────────────────────────────────────────────┘
+
+  This is exactly what NetCut's _processTraffic() does — it's the engine that turns raw packets into "iPhone: 2.3 MB, Instagram,
+  google.com, 47 DNS queries".

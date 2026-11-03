@@ -1,0 +1,162 @@
+Here are terminal-only methods for continuous device discovery (like NetCut's LoopDevs):
+     
+  ---
+
+  1. Simplest: watch + arp-scan (Every N seconds)
+
+  # Every 10 seconds, show live devices with vendors
+  watch -n 10 'sudo arp-scan --localnet --interface=en0 --ouifile /usr/local/share/arp-scan/ieee-oui.txt | grep -E "^[0-9]"'
+
+  # Every 5 seconds, compact output
+  watch -n 5 'sudo arp-scan --localnet --interface=en0 | awk "/^[0-9]/ {printf \"%-15s %-17s %s\n\", \$1, \$2, \$3}"'
+
+  ---
+
+  2. Continuous Loop with Timestamps (Best for logging)
+
+  #!/bin/bash
+  # Save as: continuous_discovery.sh
+  IFACE="en0"
+  echo "Starting continuous ARP discovery on $IFACE (Ctrl+C to stop)..."
+  echo "Timestamp           IP              MAC                Vendor"
+  echo "----------------------------------------------------------------"
+
+  while true; do
+      TS=$(date "+%H:%M:%S")
+      sudo arp-scan --localnet --interface="$IFACE" --quiet 2>/dev/null | \
+      grep -E "^[0-9]" | \
+      while read ip mac vendor; do
+          printf "%s  %-15s  %-17s  %s\n" "$TS" "$ip" "$mac" "$vendor"
+      done
+      sleep 10
+  done
+
+  chmod +x continuous_discovery.sh
+  sudo ./continuous_discovery.sh
+
+  Output:
+  Timestamp           IP              MAC                Vendor
+  ----------------------------------------------------------------
+  14:32:10  192.168.0.1     28:ee:52:f7:74:dc  TP-LINK TECHNOLOGIES
+  14:32:10  192.168.0.101   96:2d:fc:a5:07:ff  (Unknown - randomized)
+  14:32:20  192.168.0.1     28:ee:52:f7:74:dc  TP-LINK TECHNOLOGIES
+  14:32:20  192.168.0.101   96:2d:fc:a5:07:ff  (Unknown - randomized)
+  14:32:20  192.168.0.105   0e:70:b3:1a:68:38  (Unknown - randomized)
+
+  ---
+
+  3. With New Device Detection (Alerts on changes)
+
+  #!/bin/bash
+  # Save as: discovery_with_alerts.sh
+  IFACE="en0"
+  KNOWN=""
+
+  echo "Learning baseline... (Ctrl+C to stop)"
+  while true; do
+      CURRENT=$(sudo arp-scan --localnet --interface="$IFACE" --quiet 2>/dev/null | grep -E "^[0-9]" | awk '{print $1"|"$2}' |
+  sort)
+
+      if [ -n "$KNOWN" ]; then
+          NEW=$(comm -13 <(echo "$KNOWN") <(echo "$CURRENT"))
+          if [ -n "$NEW" ]; then
+              echo -e "\n\033[1;32m[+] NEW DEVICE(S) DETECTED:\033[0m"
+              echo "$NEW" | while IFS="|" read ip mac; do
+                  vendor=$(curl -s "https://api.macvendors.com/$mac" 2>/dev/null || echo "Unknown")
+                  echo "  $ip  $mac  $vendor"
+                  # Could add: notify-send "New device: $ip ($vendor)"
+              done
+          fi
+
+          GONE=$(comm -23 <(echo "$KNOWN") <(echo "$CURRENT"))
+          if [ -n "$GONE" ]; then
+              echo -e "\n\033[1;31m[-] DEVICE(S) GONE:\033[0m"
+              echo "$GONE"
+          fi
+      fi
+
+      KNOWN="$CURRENT"
+      sleep 15
+  done
+
+  ---
+
+  4. One-Liner for Quick Monitoring
+
+  # Compact, colorized, runs forever
+  sudo bash -c 'while true; do clear; date; arp-scan --localnet --interface=en0 | grep -E "^[0-9]"; sleep 5; done'
+
+  ---
+
+  5. With TCP SYN Wake (Like NetCut's Full Loop)
+
+  #!/bin/bash
+  # Full NetCut-style loop: ARP → TCP SYN wake → ARP again
+  IFACE="en0"
+  SUBNET="192.168.0.0/24"
+
+  while true; do
+      echo "=== $(date) ==="
+
+      # 1. ARP Baseline
+      echo "[ARP] Baseline scan..."
+      sudo arp-scan --localnet --interface="$IFACE" --quiet | grep -E "^[0-9]"
+
+      # 2. TCP SYN Ping Sweep (wakes sleeping phones)
+      echo "[TCP] SYN wake sweep..."
+      sudo nmap -sn -PS80,443,22,23,21 "$SUBNET" -oG - 2>/dev/null | grep "Up" | awk '{print $2}'
+
+      # 3. Broadcast ping (wakes broadcast-responders)
+      echo "[BCAST] Broadcast ping..."
+      ping -c 2 -W 1 192.168.0.255 >/dev/null 2>&1
+      sleep 2
+
+      # 4. ARP Follow-up (catch woken devices)
+      echo "[ARP] Follow-up scan..."
+      sudo arp-scan --localnet --interface="$IFACE" --quiet | grep -E "^[0-9]"
+
+      echo "--- Sleeping 30s ---"
+      sleep 30
+  done
+
+  ---
+
+  6. Log to File (For Later Analysis)
+
+  # Continuous logging with timestamps
+  sudo bash -c 'while true; do echo "=== $(date) ==="; arp-scan --localnet --interface=en0 | grep -E "^[0-9]"; sleep 10; done' |
+  tee -a discovery_log.txt
+
+  ---
+
+  Quick Comparison
+
+  ┌──────────────────────┬────────────────────────────┬───────────────────────┐
+  │        Method        │            Pros            │         Cons          │
+  ├──────────────────────┼────────────────────────────┼───────────────────────┤
+  │ watch -n 10 arp-scan │ Simplest, no script needed │ No history, no alerts │
+  ├──────────────────────┼────────────────────────────┼───────────────────────┤
+  │ Loop with timestamps │ Shows when devices appear  │ Basic output          │
+  ├──────────────────────┼────────────────────────────┼───────────────────────┤
+  │ With alerts          │ Detects new/gone devices   │ More complex          │
+  ├──────────────────────┼────────────────────────────┼───────────────────────┤
+  │ Full NetCut loop     │ Wakes sleeping devices     │ Slower (30-60s cycle) │
+  ├──────────────────────┼────────────────────────────┼───────────────────────┤
+  │ Logging to file      │ Historical record          │ Large files over time │
+  └──────────────────────┴────────────────────────────┴───────────────────────┘
+
+  ---
+
+  Pro Tip: Run in Background
+
+  # Start in background, save PID
+  sudo ./continuous_discovery.sh > discovery.log 2>&1 &
+  echo $! > discovery.pid
+
+  # Stop later
+  kill $(cat discovery.pid)
+
+  ---
+
+  Want me to create one of these as an executable script file? Just say which style (simple, with alerts, full NetCut loop, or
+  logging).

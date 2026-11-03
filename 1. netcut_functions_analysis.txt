@@ -1,0 +1,241 @@
+NetCut Functions Analysis - How NetCut Shows Device Activities
+================================================================
+Source: netcut_methodology_applied.md (Reverse Engineering Analysis)
+Network: 192.168.0.0/24 | Date: 2026-11-03
+
+================================================================
+NETCUT'S CORE FUNCTIONS (FROM REVERSE ENGINEERING)
+================================================================
+
+| NetCut Function/Module | Purpose | Implementation Detail |
+|------------------------|---------|----------------------|
+| CAdapterMonitor::_LoopDevs() | Primary ARP scanner - continuous discovery | Sends ARP requests to ALL IPs in subnet every ~10 seconds |
+| OnICMP6() / MakeSureOffOn6() | IPv6 Neighbor Discovery | Finds devices via NDP (ndp -a equivalent) |
+| Embedded nbtscan 1.0.35 | NetBIOS name resolution | Gets hostnames from Windows/Samba devices (port 137/UDP) |
+| OnDHCPPacket() | Passive DHCP listener | Captures hostnames, vendor class from DHCP requests (port 67/68) |
+| _processTraffic() | CORE ACTIVITY ENGINE | BPF/libpcap capture - attributes ALL packets to device by MAC |
+| MAC Vendor Lookup | OUI database mapping | 737KB local macdata database (ieee-oui.txt) |
+| Local REST API | Web UI data endpoint | HTTP on 127.0.0.1:4625, /list/ returns JSON device list |
+
+================================================================
+HOW NETCUT SHOWS "ACTIVITIES" - THE KEY MECHANISM
+================================================================
+
+STEP 1: CONTINUOUS DEVICE DISCOVERY (LoopDevs)
+-----------------------------------------------
+while (true) {
+    sendARPRequest(toEveryIPInSubnet);
+    listenARPReplies();
+    updateMAC_IP_Table();
+    sleep(10);
+}
+
+Result: Always-current MAC↔IP mapping for every device.
+
+STEP 2: TRAFFIC ATTRIBUTION (_processTraffic)
+----------------------------------------------
+// Runs on BPF/libpcap capture in promiscuous mode
+for each captured packet {
+    srcMAC = packet.ethernet.src;
+    dstMAC = packet.ethernet.dst;
+
+    // Map MAC to IP using ARP table
+    srcIP = arpTable[srcMAC];
+    dstIP = arpTable[dstMAC];
+
+    // Count bandwidth per device
+    deviceStats[srcIP].bytesSent += packet.length;
+    deviceStats[dstIP].bytesRecv += packet.length;
+
+    // Protocol classification
+    if (packet.hasHTTP) {
+        deviceStats[srcIP].webDomains.add(packet.httpHost);
+        deviceStats[srcIP].httpRequests++;
+    }
+    if (packet.hasTLS) {
+        deviceStats[srcIP].tlsDomains.add(packet.tlsSNI);
+        deviceStats[srcIP].httpsConnections++;
+    }
+    if (packet.hasDNS) {
+        deviceStats[srcIP].dnsQueries.add(packet.dnsQueryName);
+    }
+    if (packet.hasNetBIOS) {
+        deviceStats[srcIP].hostname = packet.netbiosName;
+    }
+}
+
+STEP 3: WHAT "ACTIVITY" DATA NETCUT COLLECTS PER DEVICE
+--------------------------------------------------------
+
+| Activity Type | Data Source | Displayed In NetCut UI |
+|---------------|-------------|------------------------|
+| Real-time Bandwidth | Packet byte counts (TX/RX) | Upload/Download graphs |
+| Website Visits | HTTP Host header + TLS SNI | Domain list with timestamps |
+| DNS Queries | Port 53 captures | Every domain looked up |
+| Protocols/Apps | Port + payload signatures | HTTP, HTTPS, DNS, Gaming, Streaming |
+| Active Connections | TCP SYN/FIN tracking | Connection count per device |
+| Hostname | DHCP option 12 + NetBIOS + mDNS | Friendly device name |
+| Vendor/Type | MAC OUI + Service fingerprint | "Apple iPhone", "OPPO Phone", etc. |
+
+================================================================
+THE CRITICAL DIFFERENCE: ARP SPOOFING FOR FULL VISIBILITY
+================================================================
+
+WITHOUT MITM (Passive Only - What You Can Do Safely):
+------------------------------------------------------
+- See ONLY your traffic + broadcast/multicast
+- ARP mapping from your ARP table only
+- No website visits for other devices
+- No DNS queries from other devices
+
+WITH MITM / ARP SPOOFING (What NetCut Does for "Cut" + "Monitor"):
+--------------------------------------------------------------------
+- ARP spoof target: "I am gateway" → target sends ALL traffic to NetCut
+- ARP spoof gateway: "I am target" → gateway sends ALL traffic to NetCut
+- NetCut forwards traffic (monitor) OR drops it (cut)
+- Result: SEES EVERY PACKET FROM TARGET DEVICE
+- Can show: Full browsing history, app usage, bandwidth by app
+
+NetCut's "Cut" feature IS the ARP spoofing mechanism.
+"Monitor" mode = ARP spoof + forward (full visibility)
+"Cut" mode = ARP spoof + drop (denial of service)
+
+================================================================
+YOUR NETWORK - WHAT NETCUT WOULD SHOW (7 DEVICES)
+================================================================
+
+| # | IP | MAC | Vendor | Hostname | Key Ports | NetCut Classification | Activity Visible |
+|---|-----|-----|--------|----------|-----------|----------------------|------------------|
+| 1 | 192.168.0.1 | 28:ee:52:f7:74:dc | TP-Link | TD-W8968 | 22,53,80,1900 | Gateway/Router | All DNS, HTTP admin |
+| 2 | 192.168.0.100 | 5e:ed:d5:5b:8b:0b | Apple (rand) | MacBook | 5000,7000,8082 | Apple Computer | AirPlay, dev servers |
+| 3 | 192.168.0.101 | 96:2d:fc:a5:07:ff | Randomized | iPhone | 62078 | Apple Mobile | iCloud, App Store |
+| 4 | 192.168.0.102 | (via ping) | — | iPhone | 62078 | Apple Mobile | Same as above |
+| 5 | 192.168.0.104 | (via TCP) | OPPO | OPPO A3x | 46888 | OPPO Phone | OAFP protocol |
+| 6 | 192.168.0.105 | (via TCP) | OPPO | OPPO Reno8 | 46888,10152 | OPPO Phone | OAFP + PrlmC |
+| 7 | 192.168.0.117 | (via TCP) | Unknown | — | 26123,31819,44190 | Unknown/IoT | High-port firewall |
+
+================================================================
+NETCUT'S LOCAL API - WHAT /list/ RETURNS
+================================================================
+
+HTTP GET http://127.0.0.1:4625/list/
+
+[
+  {"ip":"192.168.0.1","mac":"28:ee:52:f7:74:dc","name":"TD-W8968","vendor":"TP-Link","type":"gateway"},
+  {"ip":"192.168.0.100","mac":"5e:ed:d5:5b:8b:0b","name":"MacBook","vendor":"Apple","type":"computer"},
+  {"ip":"192.168.0.101","mac":"96:2d:fc:a5:07:ff","name":"iPhone","vendor":"Apple","type":"mobile"},
+  {"ip":"192.168.0.102","mac":"(pending)","name":"iPhone","vendor":"Apple","type":"mobile"},
+  {"ip":"192.168.0.104","mac":"(pending)","name":"OPPO A3x","vendor":"OPPO","type":"mobile"},
+  {"ip":"192.168.0.105","mac":"(pending)","name":"OPPO Reno8","vendor":"OPPO","type":"mobile"},
+  {"ip":"192.168.0.117","mac":"(pending)","name":"Unknown","vendor":"Unknown","type":"unknown"}
+]
+
+Web UI polls this endpoint every few seconds for real-time updates.
+
+================================================================
+NETCUT vs MANUAL SCANNING - KEY DIFFERENCES
+================================================================
+
+| Aspect | NetCut | Manual Scanning (What We Did) |
+|--------|--------|-------------------------------|
+| Speed | Real-time continuous (daemon) | Point-in-time snapshots |
+| ARP Spoofing | Active MITM for traffic visibility | Passive only (no MITM) |
+| Traffic Analysis | Per-device bandwidth + domains | Manual tcpdump filters |
+| Hostname Resolution | DHCP/mDNS/NetBIOS sniffing (passive) | Active nmap queries |
+| Persistence | Daemon + auto-restart on boot | One-off scripts |
+| Remote Access | Cloud sync (arcai.com) | Local only |
+| Control | Bandwidth limiting, blocking | Read-only discovery |
+| Device Fingerprinting | Continuous service detection | Single scan |
+
+================================================================
+TO REPLICATE NETCUT FULLY ON MACOS (SAFE METHODS)
+================================================================
+
+# 1. Continuous ARP Monitoring (like LoopDevs)
+while true; do sudo arp-scan --localnet --interface=en0 --ouifile /usr/local/share/arp-scan/ieee-oui.txt; sleep 10; done
+
+# 2. Passive Traffic Capture (like _processTraffic) - YOUR traffic only
+sudo tcpdump -i en0 -w capture.pcap -s 0
+
+# 3. Local Web API (like port 4625)
+# Would need: Python Flask + nmap/arp-scan wrappers + WebSocket
+
+# 4. MAC Vendor Database (like macdata)
+wget https://standards-oui.ieee.org/oui/oui.txt
+# Convert for arp-scan: awk -F'\t' '/^[0-9A-F]{6}/ {print $1 "\t" $3}' oui.txt > ieee-oui.txt
+
+# 5. Best Dashboard Alternative: ntopng
+brew install ntopng
+sudo ntopng -i en0
+# http://localhost:3000 - Shows per-device bandwidth, protocols, flows, alerts
+
+# 6. Automated NetCut-Style Scanner
+# See netcut_style_scan.sh in netcut_methodology_applied.md
+
+================================================================
+KEY INSIGHT: THE "ACTIVITY VIEW" REQUIRES MITM
+================================================================
+
+NetCut's ability to show:
+- "Website visits per device"
+- "App usage per device"
+- "Bandwidth by application per device"
+- "Real-time traffic graphs per device"
+
+ALL REQUIRE ARP SPOOFING (MITM) TO INTERCEPT OTHER DEVICES' TRAFFIC.
+
+Without MITM, you only see:
+- Your own traffic
+- Broadcast/multicast (ARP, mDNS, DHCP, SSDP)
+- Devices that talk directly to you
+
+This is why NetCut's "Monitor" and "Cut" are the same underlying mechanism:
+ARP spoofing enables BOTH traffic interception AND denial of service.
+
+================================================================
+SAFE ALTERNATIVES FOR "NETCUT-LIKE" VISIBILITY
+================================================================
+
+| Goal | Safe Method |
+|------|-------------|
+| Device list + vendor | `sudo arp-scan --localnet --ouifile ieee-oui.txt` |
+| Hostnames | `nmap -sU -p 137,5353 --script=nbstat,dns-service-discovery` |
+| Per-device bandwidth | `sudo ntopng -i en0` (http://localhost:3000) |
+| DNS queries (your traffic) | `sudo tcpdump -i en0 -n port 53` |
+| HTTP Host headers (your traffic) | `sudo tcpdump -i en0 -n -A "tcp port 80"` |
+| TLS SNI (your traffic) | `sudo tcpdump -i en0 -n "tcp port 443" \| grep -i sni` |
+| Full traffic capture | `sudo tcpdump -i en0 -w capture.pcap` then analyze with Wireshark/tshark |
+| Continuous ARP watch | `watch -n 10 'sudo arp-scan --localnet --interface=en0'` |
+
+================================================================
+LEARNING MITM SAFELY (ISOLATED LAB ONLY)
+================================================================
+
+# 1. VirtualBox → 2 VMs (Kali + Ubuntu/Windows)
+# 2. Both on "Host-Only Adapter" (192.168.56.0/24 - ISOLATED)
+# 3. In Kali:
+sudo echo 1 > /proc/sys/net/ipv4/ip_forward
+sudo arpspoof -i eth0 -t 192.168.56.101 192.168.56.1
+sudo arpspoof -i eth0 -t 192.168.56.1 192.168.56.101
+# 4. Wireshark captures everything - learn safely
+
+================================================================
+CONCLUSION
+================================================================
+
+NetCut shows device activities by:
+1. CONTINUOUS ARP SCANNING (LoopDevs) - knows every device
+2. PASSIVE TRAFFIC CAPTURE (BPF/_processTraffic) - sees packets
+3. MAC→IP ATTRIBUTION - maps every packet to a device
+4. PROTOCOL CLASSIFICATION - identifies apps/domains/protocols
+5. OPTIONAL ARP SPOOFING (MITM) - sees OTHER devices' traffic
+
+The "secret sauce" for activity visibility is #5: ARP SPOOFING.
+Without it, you only get device discovery, not activity monitoring.
+
+For legitimate network monitoring: USE ntopng (passive, no MITM).
+For learning MITM: USE ISOLATED LAB (VirtualBox host-only network).
+
+================================================================
+Generated from: netcut_methodology_applied.md
+Date: 2026-11-03

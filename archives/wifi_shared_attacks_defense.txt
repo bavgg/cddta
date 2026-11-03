@@ -1,0 +1,163 @@
+# WiFi / Shared Network Attacks - Educational Defense Guide
+# Generated: $(date)
+# Purpose: Understanding threats to better protect against them
+# Context: Authorized security testing, defensive security, education only
+
+================================================================================
+COMMON SHARED WIFI ATTACK VECTORS (EDUCATIONAL OVERVIEW)
+================================================================================
+
+| Attack Category       | Technique                  | What It Does                                    | Detection                                      | Defense                                              |
+|----------------------|----------------------------|-------------------------------------------------|------------------------------------------------|------------------------------------------------------|
+| MITM                 | ARP Spoofing/Poisoning     | Attacker tricks devices into sending traffic    | `arp -a` shows duplicate MACs; `arpwatch`      | Static ARP; VPN; HTTPS; Port Security; DAI          |
+|                      | DNS Spoofing               | Redirects domains to malicious IPs              | Cert warnings; DNSSEC validation               | DoH; DNSSEC; Certificate pinning                    |
+|                      | DHCP Spoofing              | Rogue DHCP gives attacker as gateway            | Multiple DHCP offers; `dhcpdump`               | DHCP snooping; 802.1X                               |
+| Traffic Interception | Passive Sniffing           | Captures unencrypted traffic (HTTP, FTP, Telnet)| Promiscuous mode (`ifconfig \| grep PROMISC`)  | TLS 1.3; VPN; Encrypted DNS                         |
+|                      | SSL Stripping              | Downgrades HTTPS -> HTTP                        | Mixed content warnings; HSTS preload           | HSTS; HTTPS Everywhere; Cert Transparency           |
+| Device Targeting     | Evil Twin / Rogue AP       | Fake AP with same SSID, stronger signal         | Multiple APs same SSID; `airport -s`           | WPA3-SAE; Verify AP MAC; WPA3-Enterprise            |
+|                      | KRACK                      | Forces nonce reuse in WPA2 handshake            | Rare; patched in modern OS                     | Update firmware/OS; WPA3                            |
+|                      | PMKID Attack               | Extracts PMKID for offline cracking             | Hashcat captures; `hcxtools`                   | Long complex PSK; WPA3-Enterprise                   |
+| Client-Side          | mDNS/SSDP Enumeration      | Discovers services, hostnames, device types     | `avahi-browse`; `nmap -sU -p 5353`             | Disable mDNS/SSDP; Firewall                         |
+|                      | SMB/NetBIOS Relay          | Captures NTLM hashes, relays for auth           | Responder traffic; SMB signing disabled        | SMB signing; Disable NTLM; LLMNR/NetBIOS off        |
+| Network Pivoting     | VLAN Hopping               | Double-tagging or switch spoofing               | Unexpected VLAN tags; Switch logs              | Disable DTP; Native VLAN != user VLAN; Port security|
+|                      | MAC Flooding               | Overflows switch CAM table -> hub mode          | Port security violations; MAC table full       | Port security; Storm control                        |
+
+================================================================================
+HOW NETCUT MAPS TO ATTACK TECHNIQUES (FROM REVERSE ENGINEERING)
+================================================================================
+
+| Netcut Feature                    | Attack Technique         | Defensive Counterpart                    |
+|-----------------------------------|--------------------------|------------------------------------------|
+| CNetCutSpoofer::_ChangeArpTable() | ARP Poisoning (MITM)     | arpwatch, static ARP, DAI                |
+| MakeSureOffOn()/TimerMakeSureoffAll()| DoS via ARP (cut off)  | Port security; 802.1X; Wireless Isolation|
+| _BlockDNS443()                    | DoH Blocking             | DoH bypass detection; ECH                |
+| CNetCutPacketSender2              | Packet Injection         | WPA3; 802.11w (MFP)                      |
+| CNetCutSpeedLimiter               | Traffic Shaping/QoS Abuse| Fair queuing; Per-user bandwidth limits  |
+
+================================================================================
+YOUR DEFENSE CHECKLIST (FOR SHARED WIFI)
+================================================================================
+
+IMMEDIATE (NO ADMIN ACCESS REQUIRED):
+-------------------------------------
+1. Always use VPN on shared WiFi
+2. Verify HTTPS/TLS on all sites
+3. Disable auto-connect to open networks
+4. Turn off file sharing, AirDrop, mDNS
+   sudo defaults write /Library/Preferences/com.apple.NetworkBrowser DisableAirDrop -bool YES
+
+5. Use encrypted DNS (DoH)
+   macOS: System Settings -> Network -> DNS -> DNS over HTTPS
+   Or: sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder
+
+6. Check for ARP anomalies
+   arp -a | awk '{print $4}' | sort | uniq -d  # Duplicate MACs = possible spoofing
+
+NETWORK ADMIN (IF YOU CONTROL THE ROUTER):
+------------------------------------------
+[ ] Enable WPA3-SAE (or WPA2-AES minimum)
+[ ] Enable 802.11w (Management Frame Protection)
+[ ] Enable Client Isolation / AP Isolation
+[ ] Disable WPS
+[ ] Use strong PSK (20+ chars) or WPA3-Enterprise (RADIUS)
+[ ] Enable DHCP Snooping + Dynamic ARP Inspection (managed switches)
+[ ] Enable Port Security (sticky MACs, violation=shutdown)
+[ ] Disable DTP, CDP, LLDP on user ports
+[ ] Separate IoT/Guest VLANs from trusted devices
+[ ] Monitor: arpwatch, ntopng, Zeek (Bro), Suricata
+
+DETECT ACTIVE ATTACKS:
+----------------------
+# ARP spoofing detection
+sudo arpwatch -i en0  # Logs MAC-IP changes
+
+# Rogue DHCP detection
+sudo dhcpdump -i en0  # Shows all DHCP traffic
+
+# Promiscuous mode check
+ifconfig en0 | grep PROMISC  # Should NOT show PROMISC normally
+
+# Wireless scan for evil twins
+/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -s | grep -i "your_ssid"
+
+# Certificate transparency check
+# Browser: Click lock icon -> Certificate -> Check "Valid" and issuer
+
+================================================================================
+LEGAL & ETHICAL BOUNDARIES
+================================================================================
+
+| AUTHORIZED / EDUCATIONAL                    | UNAUTHORIZED / ILLEGAL                    |
+|---------------------------------------------|-------------------------------------------|
+| Testing YOUR OWN network                    | Attacking neighbor's WiFi                 |
+| CTF challenges (HackTheBox, TryHackMe)      | ARP spoofing on public/shared WiFi        |
+| Penetration test with WRITTEN scope/contract| Packet sniffing others' traffic           |
+| Lab environment (VMs, isolated VLAN)        | Evil twin on coffee shop WiFi             |
+| Learning defenses to protect users          | SSL stripping, credential harvesting      |
+
+================================================================================
+RECOMMENDED LEARNING PATHS (LEGAL)
+================================================================================
+
+| Platform                    | Focus                                          | Cost            |
+|-----------------------------|------------------------------------------------|-----------------|
+| TryHackMe                   | "Network Security", "WiFi Hacking 101" rooms   | Free tier       |
+| HackTheBox                  | "Wireless Attacks", "MITM" machines            | Subscription    |
+| CWSP                        | Deep WiFi security                             | Certification   |
+| Offensive Security (OSWP)   | Wireless penetration testing                   | Course + Exam   |
+| WiFi Analyzer Apps          | Passive monitoring only (Fing, WiFi Analyzer)  | Free            |
+
+================================================================================
+YOUR CURRENT NETWORK RISK ASSESSMENT
+================================================================================
+
+Based on your scan (only router + your Mac active):
+
+| Risk              | Level | Why                                          |
+|-------------------|-------|----------------------------------------------|
+| ARP Spoofing      | LOW   | No other active targets                      |
+| Evil Twin         | MEDIUM| If you auto-connect to "TP-Link" SSIDs       |
+| Passive Sniffing  | LOW   | No unencrypted traffic visible               |
+| KRACK/PMKID       | LOW   | WPA2/WPA3 patched on modern macOS            |
+| DHCP Spoofing     | LOW   | Single DHCP server (router)                  |
+
+BEST DEFENSE RIGHT NOW:
+- Use a reputable VPN on any shared WiFi
+- Keep macOS updated
+- Verify TLS certificates
+
+================================================================================
+QUICK REFERENCE COMMANDS
+================================================================================
+
+# Scan for devices (like Netcut)
+sudo arp-scan --localnet --interface=en0
+sudo nmap -sn 192.168.0.0/24
+
+# Monitor ARP changes continuously
+sudo arpwatch -i en0
+
+# Check for promiscuous mode
+ifconfig en0 | grep PROMISC
+
+# View ARP table for duplicates
+arp -a | awk '{print $4}' | sort | uniq -d
+
+# Wireless scan
+/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -s
+
+# DHCP traffic
+sudo dhcpdump -i en0
+
+# Passive capture (30 sec)
+sudo timeout 30 tcpdump -i en0 -nn -v
+
+================================================================================
+DISCLAIMER
+================================================================================
+This document is for EDUCATIONAL AND DEFENSIVE PURPOSES ONLY.
+- Use only on networks you own or have explicit written permission to test
+- Unauthorized access to computer networks is illegal in most jurisdictions
+- This knowledge should be used to protect yourself and authorized networks
+- The author assumes no liability for misuse of this information
+

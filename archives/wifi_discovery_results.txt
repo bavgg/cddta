@@ -1,0 +1,118 @@
+WiFi Device Discovery Results
+=============================
+Date: 2026-11-03
+Network: 192.168.0.0/24
+Interface: en0 (192.168.0.100)
+Gateway: 192.168.0.1
+
+SCAN METHODOLOGY EXECUTED
+-------------------------
+Following the multi-layer iterative methodology from methodology_lessons.md:
+
+1. ARP Baseline Scan (Layer 2)
+2. TCP SYN Ping Sweep (Layer 4)
+3. Broadcast Ping Wake
+4. ARP Follow-up Scan
+5. Service Version Scans (Layer 7)
+6. UDP Service Scans
+
+DISCOVERED DEVICES
+------------------
+
+DEVICE 1: Router
+IP:       192.168.0.1
+MAC:      28:EE:52:F7:74:DC
+Vendor:   TP-LINK TECHNOLOGIES CO.,LTD.
+Services:
+  - 22/tcp   open   ssh        Dropbear sshd 2012.55
+  - 53/tcp   open   tcpwrapped (DNS)
+  - 80/tcp   open   http       (Admin interface)
+  - 1900/tcp open   upnp       UPnP/1.0
+OS:       Linux (Dropbear, Portable SDK for UPnP 1.6.19)
+Identification: Confirmed TP-Link Router
+
+DEVICE 2: This Mac (Scanning Host)
+IP:       192.168.0.100
+MAC:      5E:ED:D5:5B:8B:0B
+Note:     Locally administered (randomized) MAC - prefix 5e:
+Role:     Scanner, not a target
+
+DEVICE 3: Apple iPhone/iPad
+IP:       192.168.0.101
+MAC:      96:2D:FC:A5:07:FF
+Note:     Locally administered (randomized) MAC - prefix 96:
+Services (TCP):
+  - 49152/tcp open  tcpwrapped   (AirPlay related)
+  - 62078/tcp open  iphone-sync  (DEFINITIVE Apple indicator)
+Services (UDP):
+  - 5353/udp  open  zeroconf     (mDNS/Bonjour)
+Identification: CONFIRMED Apple iOS/iPadOS device
+  - Port 62078 (iphone-sync) = 100% Apple device signature
+  - Port 49152 + 5353 = AirPlay + mDNS
+  - Randomized MAC (96: prefix) = iOS 14+ privacy feature
+
+DEVICE 4: Firewalled Device (Windows/Android)
+IP:       192.168.0.105
+MAC:      0E:70:B3:1A:68:38
+Note:     Locally administered (randomized) MAC - prefix 0e:
+TCP Scan: All 100 top ports closed (host responds with RST)
+UDP Services (open|filtered):
+  - 137/udp  netbios-ns      (NetBIOS Name Service)
+  - 138/udp  netbios-dgm     (NetBIOS Datagram)
+  - 139/udp  netbios-ssn     (NetBIOS Session)
+  - 443/udp  https
+  - 1701/udp l2tp           (L2TP VPN)
+  - 158/udp  pcmail-srv
+  - 1029/udp solid-mux
+  - 2048/udp dls-monitor
+  - 2222/udp msantipiracy
+  - 20031/udp bakbonenetvault
+  - 30718/udp unknown
+  - 49193/udp unknown
+  - 158/udp  pcmail-srv
+Identification: Likely Windows device (NetBIOS suite) or Android with many services
+  - NetBIOS (137/138/139) = Strong Windows indicator
+  - Many UDP ports open|filtered = Firewall present
+  - Randomized MAC (0e: prefix) = Windows 10+ or Android 10+
+
+SUMMARY
+-------
+Total Discovered: 4 devices (1 router, 1 Apple mobile, 1 Windows/Android, 1 scanner)
+Identified:       3 devices (Router, Apple iPhone/iPad, Windows/Android)
+Unknown:          0 (all live devices identified via behavioral fingerprinting)
+
+METHODOLOGY LESSONS CONFIRMED
+-----------------------------
+✓ ARP scan alone found ONLY 1 device (router) - misses sleeping/randomized devices
+✓ Broadcast ping woke device .101 which responded to ICMP
+✓ Direct ping sweep found .105 which nmap ping sweep missed
+✓ MAC randomization on ALL mobile devices (5e:, 96:, 0e: prefixes)
+✓ Behavioral fingerprinting (ports/services) works where MAC fails
+✓ Port 62078 = definitive Apple device indicator
+✓ NetBIOS UDP = Windows indicator
+✓ Filtered ports = firewall present; Closed ports = host up, no service
+✓ Multi-layer scanning essential: Layer 2 ≠ Layer 3 ≠ Layer 4 ≠ Layer 7 visibility
+
+COMMANDS EXECUTED
+-----------------
+1. ifconfig en0
+2. which nmap arp-scan
+3. sudo arp-scan --localnet --interface=en0
+4. sudo nmap -sn -PS80,443,22,23,21 192.168.0.0/24
+5. ping -c 3 192.168.0.255
+6. sudo arp-scan --localnet --interface=en0 (follow-up)
+7. sudo nmap -sT -F -T4 192.168.0.101
+8. sudo nmap -sT -sV -p 49152,62078,5000,7000 192.168.0.101
+9. sudo nmap -sT -F -T4 -Pn 192.168.0.105
+10. sudo nmap -sT -sV -p 22,53,80,443,1900 192.168.0.1
+11. sudo nmap -sU -F -T4 192.168.0.101 192.168.0.105
+12. Targeted ping sweep for specific IPs
+13. sudo nmap -sT -Pn --top-ports 50 192.168.0.0/24 (broad scan, timed out)
+
+NEXT STEPS
+----------
+1. Access router admin (http://192.168.0.1) for DHCP client table
+2. Enable SNMP on router for full device inventory
+3. Passive monitoring with Wireshark/tcpdump
+4. Check for guest network / VLAN isolation
+5. Authorized scan on different networks for practice

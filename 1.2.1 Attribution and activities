@@ -1,0 +1,93 @@
+Short answer: Partially. You see the domain, not the page/content.
+
+  ---
+
+  What You CAN See (Encrypted but Visible)
+
+  ┌───────────────┬─────────────────────────────────────────┬──────────────────────────────────┐
+  │     Site      │         What Attribution Shows          │               How                │
+  ├───────────────┼─────────────────────────────────────────┼──────────────────────────────────┤
+  │ facebook.com  │ facebook.com, fbcdn.net, fbsbx.com      │ TLS SNI (Server Name Indication) │
+  ├───────────────┼─────────────────────────────────────────┼──────────────────────────────────┤
+  │ reddit.com    │ reddit.com, redditmedia.com, redd.it    │ TLS SNI                          │
+  ├───────────────┼─────────────────────────────────────────┼──────────────────────────────────┤
+  │ youtube.com   │ googlevideo.com, youtube.com, ytimg.com │ TLS SNI                          │
+  ├───────────────┼─────────────────────────────────────────┼──────────────────────────────────┤
+  │ instagram.com │ instagram.com, cdninstagram.com         │ TLS SNI                          │
+  ├───────────────┼─────────────────────────────────────────┼──────────────────────────────────┤
+  │ twitter.com   │ twitter.com, twimg.com, t.co            │ TLS SNI                          │
+  └───────────────┴─────────────────────────────────────────┴──────────────────────────────────┘
+
+  Example output:
+  Device: 192.168.0.101 (iPhone) → 157.240.x.x [TCP] facebook.com
+  Device: 192.168.0.101 (iPhone) → 151.101.x.x [TCP] reddit.com
+  Device: 192.168.0.100 (MacBook) → 172.217.x.x [TCP] youtube.com
+
+  ---
+
+  What You CANNOT See (Encrypted Inside TLS)
+
+  ┌───────────────────────────────────────────┬─────────────────────────────────────────────┐
+  │                  Hidden                   │                     Why                     │
+  ├───────────────────────────────────────────┼─────────────────────────────────────────────┤
+  │ Specific page (/user/john, /r/technology) │ Encrypted in HTTP request path              │
+  ├───────────────────────────────────────────┼─────────────────────────────────────────────┤
+  │ POST data (comments, messages, login)     │ Encrypted in HTTP body                      │
+  ├───────────────────────────────────────────┼─────────────────────────────────────────────┤
+  │ Search queries                            │ Encrypted (unless in URL on old HTTP sites) │
+  ├───────────────────────────────────────────┼─────────────────────────────────────────────┤
+  │ Video titles watched                      │ Encrypted                                   │
+  ├───────────────────────────────────────────┼─────────────────────────────────────────────┤
+  │ Messages/DMs content                      │ Encrypted end-to-end (some apps)            │
+  └───────────────────────────────────────────┴─────────────────────────────────────────────┘
+
+  ---
+
+  The TLS SNI Limitation
+
+  ┌─────────────────────────────────────────────────────────────┐
+  │  TLS Handshake (UNENCRYPTED - visible to attribution)       │
+  │  ─────────────────────────────────────────────────────────  │
+  │  Client Hello:                                              │
+  │    SNI: "facebook.com"           ← YOU SEE THIS            │
+  │    Cipher suites, extensions...                             │
+  │                                                             │
+  │  Server Hello:                                              │
+  │    Certificate: *.facebook.com    ← YOU SEE THIS           │
+  │                                                             │
+  │  Application Data (ENCRYPTED - you see ONLY bytes/count)   │
+  │  ─────────────────────────────────────────────────────────  │
+  │  GET /john.doe/posts/123 HTTP/1.1    ← HIDDEN              │
+  │  Host: facebook.com                                     ← HIDDEN
+  │  Cookie: datr=xyz; c_user=123...        ← HIDDEN          │
+  │  POST /api/graphql/ {query: "..."}      ← HIDDEN           │
+  └─────────────────────────────────────────────────────────────┘
+
+  ---
+
+  Modern Complications
+
+  ┌──────────────────────────────┬─────────────────────────────────────────────────────────────────────┐
+  │          Technique           │                        Effect on Attribution                        │
+  ├──────────────────────────────┼─────────────────────────────────────────────────────────────────────┤
+  │ ESNI/ECH (Encrypted SNI)     │ Hides even the domain! (Firefox, Chrome, iOS 15+)                   │
+  ├──────────────────────────────┼─────────────────────────────────────────────────────────────────────┤
+  │ DoH/DoT (DNS over HTTPS/TLS) │ Hides DNS queries                                                   │
+  ├──────────────────────────────┼─────────────────────────────────────────────────────────────────────┤
+  │ CDN Sharing                  │ facebook.com and instagram.com both → 157.240.x.x (same IP)         │
+  ├──────────────────────────────┼─────────────────────────────────────────────────────────────────────┤
+  │ App vs Browser               │ Apps often use different domains (e.g., graph.facebook.com for API) │
+  └──────────────────────────────┴─────────────────────────────────────────────────────────────────────┘
+
+  ---
+
+  What You'd Actually See on Your Network
+
+  # Real attribution output for Facebook/Reddit:
+  Device: 192.168.0.101 (iPhone) → 157.240.22.35  [TCP] facebook.com
+  Device: 192.168.0.101 (iPhone) → 157.240.22.35  [TCP] fbcdn.net
+  Device: 192.168.0.101 (iPhone) → 151.101.1.140  [TCP] reddit.com
+  Device: 192.168.0.101 (iPhone) → 151.101.65.140 [TCP] redditmedia.com
+  Device: 192.168.0.101 (iPhone) → 172.217.14.206 [TCP] googlevideo.com  (YouTube)
+
+  # Bandwidth tells you MORE:

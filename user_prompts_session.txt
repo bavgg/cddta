@@ -1,0 +1,143 @@
+User Prompts - Full Session History
+=====================================
+Date: 2026-11-03
+Session: Continuous Network Monitoring & Traffic Attribution
+
+--------------------------------------------------------------------------------
+PROMPT 1:
+I want you to read methodology_lessons.md, then say what you learned then execute the commands by yourself
+
+--------------------------------------------------------------------------------
+PROMPT 2:
+192.168.0.101 detect which port is open
+
+--------------------------------------------------------------------------------
+PROMPT 3:
+2 TCP ports open (49152, 62078)
+  - 1 UDP port open (5353)
+  - Port 62078 =: what can you do with these ports
+
+--------------------------------------------------------------------------------
+PROMPT 4:
+Device discovery / inventory            : can you do this
+
+--------------------------------------------------------------------------------
+PROMPT 5:
+nmap -sT -sV -T4 <target_ips>: how to use htis
+
+--------------------------------------------------------------------------------
+PROMPT 6:
+figure out how netcut able to show activities of a device
+
+--------------------------------------------------------------------------------
+PROMPT 7:
+can you demonstrate or try to test it until it works
+
+--------------------------------------------------------------------------------
+PROMPT 8:
+try it on my device iphone 192.168.0.101
+
+--------------------------------------------------------------------------------
+PROMPT 9:
+read the netcut_macos_reverse_engineering then figure out what functions did netcut to figure out or show activities of a device
+
+--------------------------------------------------------------------------------
+PROMPT 10:
+save this info in a text file
+
+--------------------------------------------------------------------------------
+PROMPT 11:
+how to do continous device discovery just using terminal commands
+
+--------------------------------------------------------------------------------
+PROMPT 12:
+how to install watch
+
+--------------------------------------------------------------------------------
+PROMPT 13:
+what is traffic attribution
+
+--------------------------------------------------------------------------------
+PROMPT 14:
+can you explain it more simply
+
+--------------------------------------------------------------------------------
+PROMPT 15:
+relate these steps on how they work together
+
+--------------------------------------------------------------------------------
+PROMPT 16:
+Attribution : with this you can see the activities of a device
+
+--------------------------------------------------------------------------------
+PROMPT 17:
+how about facebook, reddit can you see it with attribution
+
+--------------------------------------------------------------------------------
+PROMPT 18:
+can you try this if it works
+
+--------------------------------------------------------------------------------
+PROMPT 19:
+how to install watch
+
+--------------------------------------------------------------------------------
+PROMPT 20:
+what is traffic attribution
+
+--------------------------------------------------------------------------------
+PROMPT 21:
+can you explain it more simply
+
+--------------------------------------------------------------------------------
+PROMPT 22:
+relate these steps on how they work together
+
+--------------------------------------------------------------------------------
+PROMPT 23:
+Attribution : with this you can see the activities of a device
+
+--------------------------------------------------------------------------------
+PROMPT 24:
+how about facebook, reddit can you see it with attribution
+
+--------------------------------------------------------------------------------
+PROMPT 25:
+can you try this if it works
+
+--------------------------------------------------------------------------------
+PROMPT 26:
+show the full commands not just the <target_ips> and give the result
+
+--------------------------------------------------------------------------------
+PROMPT 27:
+save it to a txt file
+
+--------------------------------------------------------------------------------
+PROMPT 28:
+show the full commands not just the <target_ips> and give the result
+
+--------------------------------------------------------------------------------
+PROMPT 29:
+save it to a txt file
+
+--------------------------------------------------------------------------------
+PROMPT 30:
+now can you create a program so to run this continuously and monitor continuously and to test the real device for example a device visit reddit, etc.
+
+--------------------------------------------------------------------------------
+PROMPT 31:
+are you done?
+
+--------------------------------------------------------------------------------
+PROMPT 32:
+save your thought process on how you created those programs
+
+--------------------------------------------------------------------------------
+PROMPT 33:
+save my prompts to a txt file so I can review it later. all my prompts in this session
+
+--------------------------------------------------------------------------------
+END OF SESSION
+=====================================
+Total: 33 prompts

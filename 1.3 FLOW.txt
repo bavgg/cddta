@@ -1,0 +1,185 @@
+Here's how the pieces connect and flow together in real time:
+
+  ---
+
+  The Complete Loop (Runs Continuously)
+
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │                    NETCUT'S CONTINUOUS LOOP                         │
+  └─────────────────────────────────────────────────────────────────────┘
+
+      ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+      │   STEP 1     │     │   STEP 2     │     │   STEP 3     │
+      │  ARP SCAN    │────▶│  PACKET CAP  │────▶│  ATTRIBUTE   │
+      │  (Who's here)│     │  (What flows)│     │  (Who did it)│
+      └──────────────┘     └──────────────┘     └──────────────┘
+             │                    │                    │
+             ▼                    ▼                    ▼
+      ┌─────────────────────────────────────────────────────────────┐
+      │                    SHARED STATE (Memory)                    │
+      │  ARP TABLE:  MAC ↔ IP ↔ Device Name ↔ Vendor               │
+      │  STATS:      IP → {bytes, websites, DNS, apps, connections}│
+      └─────────────────────────────────────────────────────────────┘
+             │
+             ▼
+      ┌──────────────┐
+      │   STEP 4     │
+      │  DISPLAY     │
+      │  (Dashboard) │
+      └──────────────┘
+
+  ---
+
+  Step-by-Step with Your Network
+
+  STEP 1: ARP Scan — "Roll Call" (Every 10 sec)
+
+  # NetCut sends: "Who has 192.168.0.1?" "Who has 192.168.0.2?" ... "Who has 192.168.0.254?"
+  # Devices reply: "I have 192.168.0.101, my MAC is 96:2d:fc:a5:07:ff"
+  Result → ARP TABLE in memory:
+  192.168.0.1    → 28:ee:52:f7:74:dc  → TP-Link Router
+  192.168.0.100  → 5e:ed:d5:5b:8b:0b  → MacBook (randomized MAC)
+  192.168.0.101  → 96:2d:fc:a5:07:ff  → iPhone (randomized MAC)
+  192.168.0.105  → 0e:70:b3:1a:68:38  → OPPO Phone (randomized MAC)
+
+  ---
+
+  STEP 2: Packet Capture — "Listen to Everything"
+
+  # Network card in PROMISCUOUS MODE (via BPF/libpcap)
+  # Sees ALL packets on the wire, not just yours
+  Raw packets flowing:
+  Packet #1: 96:2d:fc:a5:07:ff  →  28:ee:52:f7:74:dc   (64 bytes, TCP port 443)
+  Packet #2: 28:ee:52:f7:74:dc  →  96:2d:fc:a5:07:ff   (1500 bytes, TCP port 443)
+  Packet #3: 5e:ed:d5:5b:8b:0b  →  28:ee:52:f7:74:dc   (512 bytes, UDP port 53)
+  Packet #4: 0e:70:b3:1a:68:38  →  28:ee:52:f7:74:dc   (2048 bytes, TCP port 46888)
+
+  ---
+
+  STEP 3: Attribution — "Connect the Dots"
+
+  # For EACH packet, the engine does:
+  for packet in capture:
+      src_mac = packet.ethernet.src      # e.g., 96:2d:fc:a5:07:ff
+      dst_mac = packet.ethernet.dst      # e.g., 28:ee:52:f7:74:dc
+
+      # LOOKUP: MAC → IP (using ARP TABLE from Step 1)
+      src_ip = arp_table[src_mac]        # 192.168.0.101
+      dst_ip = arp_table[dst_mac]        # 192.168.0.1
+
+      # LOOKUP: IP → Device Name
+      src_name = device_names[src_ip]    # "iPhone"
+      dst_name = device_names[dst_ip]    # "Router"
+
+      # ATTRIBUTE: Add to that device's stats
+      stats[src_ip].bytes_sent += packet.length
+      stats[src_ip].connections.add(dst_ip)
+
+      # DEEP INSPECTION: What app/website?
+      if packet.has_tls_sni:
+          stats[src_ip].websites.add(packet.tls_sni)  # "apple.com"
+      if packet.has_http_host:
+          stats[src_ip].websites.add(packet.http_host)
+      if packet.has_dns_query:
+          stats[src_ip].dns_queries.add(packet.dns_query)
+
+  Result → PER-DEVICE STATS:
+  192.168.0.101 (iPhone):
+    → Sent: 2.3 MB, Received: 18.7 MB
+    → Websites: apple.com, icloud.com, instagram.com
+    → DNS: 47 queries (google.com, api.instagram.com, ...)
+    → Connections: Router (192.168.0.1), 17.253.x.x (Apple CDN)
+    
+  192.168.0.105 (OPPO Phone):
+    → Sent: 512 KB, Received: 3.2 MB
+    → Port 46888 (OAFP protocol) → OPPO cloud
+    → DNS: oppomobile.com, coloros.com
+
+  ---
+
+  STEP 4: Display — "Show the Dashboard"
+
+  ┌────────────────────────────────────────────────────────────────┐
+  │  Device              IP           TX     RX      Websites      │
+  ├────────────────────────────────────────────────────────────────┤
+  │  📱 iPhone          .101       2.3MB  18.7MB  instagram.com   │
+  │  💻 MacBook         .100       45MB   120MB   github.com      │
+  │  📱 OPPO A3x        .104       512KB  3.2MB   oppomobile.com  │
+  │  📱 OPPO Reno8      .105       1.2MB  8.4MB   coloros.com     │
+  │  🌐 Router          .1         120MB  200MB   (gateway)       │
+  └────────────────────────────────────────────────────────────────┘
+
+  ---
+
+  How They Depend on Each Other
+
+  ┌───────────────────┬────────────────────────┬────────────────────────────────────┐
+  │       Step        │       Feeds Into       │         Breaks If Missing          │
+  ├───────────────────┼────────────────────────┼────────────────────────────────────┤
+  │ 1. ARP Scan       │ Step 3 (MAC→IP lookup) │ Can't know which device = which IP │
+  ├───────────────────┼────────────────────────┼────────────────────────────────────┤
+  │ 2. Packet Capture │ Step 3 (raw data)      │ No traffic to attribute            │
+  ├───────────────────┼────────────────────────┼────────────────────────────────────┤
+  │ 3. Attribution    │ Step 4 (display)       │ Just raw numbers, no device names  │
+  ├───────────────────┼────────────────────────┼────────────────────────────────────┤
+  │ 4. Display        │ User action            │ Invisible without UI               │
+  └───────────────────┴────────────────────────┴────────────────────────────────────┘
+
+  ---
+
+  The Critical Insight: They Run in PARALLEL
+
+  Thread 1: ARP Scanner        → Updates ARP TABLE every 10s
+  Thread 2: Packet Capture     → Feeds packets to Attribution engine continuously
+  Thread 3: Attribution Engine → Consumes packets, updates STATS in real-time
+  Thread 4: Web UI             → Reads STATS, renders dashboard every 1s
+
+  All sharing the same in-memory ARP TABLE and STATS structures.
+
+  ---
+
+  Your Terminal Version (Simplified)
+
+  # Terminal 1: ARP Scanner (updates /tmp/arp_table.txt)
+  while true; do
+      sudo arp-scan --localnet --interface=en0 --quiet > /tmp/arp_table.txt
+      sleep 10
+  done &
+
+  # Terminal 2: Packet Capture (writes /tmp/capture.pcap)
+  sudo tcpdump -i en0 -w /tmp/capture.pcap &
+
+  # Terminal 3: Attribution + Display (reads both, shows dashboard)
+  while true; do
+      clear
+      echo "=== $(date) ==="
+      # Join ARP table with packet analysis
+      tshark -r /tmp/capture.pcap -Y "frame.time_relative > -5" \
+        -T fields -e eth.src -e ip.dst -e tls.handshake.extensions_server_name 2>/dev/null | \
+      while read src_mac dst_ip sni; do
+          # Lookup MAC in ARP table
+          device=$(grep "$src_mac" /tmp/arp_table.txt | awk '{print $1}')
+          echo "Device $device → $dst_ip → $sni"
+      done | sort | uniq -c | sort -rn | head -20
+      sleep 5
+  done
+
+  ---
+
+  Summary: The Chain
+
+  ARP Scan  ──creates──▶  MAC↔IP Table  ──used by──▶  Attribution Engine
+      ▲                                                    │
+      │                                                    ▼
+      │                                             Per-Device Stats
+      │                                                    │
+      └─────────────── continuous loop ────────────────────┘
+                                │
+                                ▼
+                          Dashboard Display
+
+  Each step enables the next. Without ARP scan → no attribution. Without capture → no data. Without attribution → just anonymous 
+  packets.
+
+  The user wants to understand how the steps work together. They've been reading the netcut_functions_analysis.txt file and want a
+  cohesive explanation of the workflow. Let me explain the complete loop clearly.
